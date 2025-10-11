@@ -9,7 +9,7 @@
  */
 
 import {ai} from '@/ai/genkit';
-import {z} from 'genkit';
+import {z} from 'zod';
 
 const ParseBankStatementDataInputSchema = z.object({
   text: z
@@ -37,6 +37,7 @@ export async function parseBankStatementData(input: ParseBankStatementDataInput)
 
 const prompt = ai.definePrompt({
   name: 'parseBankStatementDataPrompt',
+  model: 'gemini-1.5-flash-latest',
   input: {schema: z.object({ text: z.string() }) },
   output: {schema: ParseBankStatementDataOutputSchema},
   prompt: `You are an expert financial data extraction specialist.
