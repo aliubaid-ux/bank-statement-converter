@@ -30,6 +30,13 @@ const nextConfig: NextConfig = {
       },
     ],
   },
+  experimental: {
+    // This is required to allow the Next.js dev server to accept requests from the
+    // Firebase Studio environment.
+    allowedDevOrigins: [
+      '*.cluster-wurh6gchdjcjmwrw2tqtufvhss.cloudworkstations.dev',
+    ],
+  },
 };
 
 export default nextConfig;
