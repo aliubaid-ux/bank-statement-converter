@@ -12,6 +12,7 @@ import {
   FileSpreadsheet,
   Table,
   RotateCcw,
+  KeyRound,
 } from "lucide-react";
 import * as pdfjsLib from "pdfjs-dist";
 import Tesseract from "tesseract.js";
@@ -29,6 +30,8 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Progress } from "@/components/ui/progress";
 import {
   Table as UiTable,
@@ -41,6 +44,7 @@ import {
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 
 type Status =
   | "idle"
@@ -64,14 +68,27 @@ export function HomePage() {
   const [error, setError] = useState<string | null>(null);
   const { toast } = useToast();
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [apiKey, setApiKey] = useState("");
 
   useEffect(() => {
     // Required for pdf.js to work in Next.js
-    pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
-      "pdfjs-dist/build/pdf.worker.min.js",
-      import.meta.url
-    ).toString();
+    pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.mjs`;
+
+    const storedApiKey = localStorage.getItem("gemini_api_key");
+    if (storedApiKey) {
+      setApiKey(storedApiKey);
+    }
   }, []);
+  
+  const handleApiKeyChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const newApiKey = e.target.value;
+    setApiKey(newApiKey);
+    if (newApiKey) {
+      localStorage.setItem("gemini_api_key", newApiKey);
+    } else {
+      localStorage.removeItem("gemini_api_key");
+    }
+  };
 
   const resetState = useCallback(() => {
     setFile(null);
@@ -160,7 +177,7 @@ export function HomePage() {
         }
 
         setStatus("processing-ai");
-        const result = await parseBankStatementData({ text: fullText });
+        const result = await parseBankStatementData({ text: fullText, apiKey: apiKey || undefined });
         
         if (result.transactions && result.transactions.length > 0) {
             setTransactions(result.transactions);
@@ -175,7 +192,7 @@ export function HomePage() {
       setError(err.message || "An unexpected error occurred during processing.");
       setStatus("error");
     }
-  }, []);
+  }, [apiKey]);
 
   const handleExport = useCallback(
     (format: "xlsx" | "csv" | "json") => {
@@ -239,36 +256,68 @@ export function HomePage() {
                 initial={{ opacity: 0, y: 20 }}
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -20 }}
-                className={cn(
-                  "relative flex flex-col items-center justify-center p-12 border-2 border-dashed rounded-lg transition-colors",
-                  status === "dragging" ? "border-primary bg-accent" : "border-border"
-                )}
-                onDragOver={(e) => e.preventDefault()}
-                onDragEnter={() => setStatus("dragging")}
-                onDragLeave={() => setStatus("idle")}
-                onDrop={(e) => {
-                  e.preventDefault();
-                  setStatus("idle");
-                  handleFile(e.dataTransfer.files?.[0]);
-                }}
               >
-                <FileUp className="h-16 w-16 text-muted-foreground mb-4" />
-                <p className="text-muted-foreground mb-2">
-                  Drag & drop your PDF here or
-                </p>
-                <input
-                  type="file"
-                  accept="application/pdf"
-                  onChange={(e) => handleFile(e.target.files?.[0])}
-                  className="hidden"
-                  ref={fileInputRef}
-                />
-                <Button onClick={() => fileInputRef.current?.click()}>
-                  Choose File
-                </Button>
-                <p className="text-xs text-muted-foreground mt-4">
-                  Up to 20MB. All processing happens in your browser.
-                </p>
+                <div
+                  className={cn(
+                    "relative flex flex-col items-center justify-center p-12 border-2 border-dashed rounded-lg transition-colors",
+                    status === "dragging" ? "border-primary bg-accent" : "border-border"
+                  )}
+                  onDragOver={(e) => e.preventDefault()}
+                  onDragEnter={() => setStatus("dragging")}
+                  onDragLeave={() => setStatus("idle")}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    setStatus("idle");
+                    handleFile(e.dataTransfer.files?.[0]);
+                  }}
+                >
+                  <FileUp className="h-16 w-16 text-muted-foreground mb-4" />
+                  <p className="text-muted-foreground mb-2">
+                    Drag & drop your PDF here or
+                  </p>
+                  <input
+                    type="file"
+                    accept="application/pdf"
+                    onChange={(e) => handleFile(e.target.files?.[0])}
+                    className="hidden"
+                    ref={fileInputRef}
+                  />
+                  <Button onClick={() => fileInputRef.current?.click()}>
+                    Choose File
+                  </Button>
+                  <p className="text-xs text-muted-foreground mt-4">
+                    Up to 20MB. All processing happens in your browser.
+                  </p>
+                </div>
+                <div className="mt-4 flex justify-end">
+                   <Popover>
+                      <PopoverTrigger asChild>
+                        <Button variant="ghost" size="sm">
+                          <KeyRound className="mr-2 h-4 w-4" />
+                          Set API Key
+                        </Button>
+                      </PopoverTrigger>
+                      <PopoverContent className="w-80">
+                        <div className="grid gap-4">
+                          <div className="space-y-2">
+                            <h4 className="font-medium leading-none">Gemini API Key</h4>
+                            <p className="text-sm text-muted-foreground">
+                              Optionally provide your own Gemini API key.
+                            </p>
+                          </div>
+                          <div className="grid gap-2">
+                            <Label htmlFor="api-key">API Key</Label>
+                            <Input
+                              id="api-key"
+                              value={apiKey}
+                              onChange={handleApiKeyChange}
+                              placeholder="Enter your API key"
+                            />
+                          </div>
+                        </div>
+                      </PopoverContent>
+                    </Popover>
+                </div>
               </motion.div>
             ) : isProcessing ? (
               <motion.div
