@@ -8,16 +8,13 @@
  * - ParseBankStatementDataOutput - The return type for the parseBankStatementData function.
  */
 
-import {ai as genkitAI} from '@/ai/genkit';
-import {genkit} from 'genkit';
-import {googleAI} from '@genkit-ai/google-genai';
+import {ai} from '@/ai/genkit';
 import {z} from 'genkit';
 
 const ParseBankStatementDataInputSchema = z.object({
   text: z
     .string()
     .describe('The text extracted from the bank statement PDF.'),
-  apiKey: z.string().optional().describe('Optional Gemini API key.')
 });
 export type ParseBankStatementDataInput = z.infer<typeof ParseBankStatementDataInputSchema>;
 
@@ -38,28 +35,11 @@ export async function parseBankStatementData(input: ParseBankStatementDataInput)
   return parseBankStatementDataFlow(input);
 }
 
-const parseBankStatementDataFlow = genkitAI.defineFlow(
-  {
-    name: 'parseBankStatementDataFlow',
-    inputSchema: ParseBankStatementDataInputSchema,
-    outputSchema: ParseBankStatementDataOutputSchema,
-  },
-  async input => {
-    const { apiKey, text } = input;
-    
-    let ai = genkitAI;
-    
-    if (apiKey) {
-      ai = genkit({
-        plugins: [googleAI({ apiKey })],
-      });
-    }
-
-    const prompt = ai.definePrompt({
-      name: 'parseBankStatementDataPrompt',
-      input: {schema: z.object({ text: z.string() }) },
-      output: {schema: ParseBankStatementDataOutputSchema},
-      prompt: `You are an expert financial data extraction specialist.
+const prompt = ai.definePrompt({
+  name: 'parseBankStatementDataPrompt',
+  input: {schema: z.object({ text: z.string() }) },
+  output: {schema: ParseBankStatementDataOutputSchema},
+  prompt: `You are an expert financial data extraction specialist.
 
   Your task is to parse the provided bank statement text and extract transaction data.
   The bank statement text will be provided within triple curly braces.
@@ -83,10 +63,16 @@ const parseBankStatementDataFlow = genkitAI.defineFlow(
 
   Bank Statement Text: {{{text}}}
   `,
-    });
+});
 
-
-    const {output} = await prompt({ text });
+const parseBankStatementDataFlow = ai.defineFlow(
+  {
+    name: 'parseBankStatementDataFlow',
+    inputSchema: ParseBankStatementDataInputSchema,
+    outputSchema: ParseBankStatementDataOutputSchema,
+  },
+  async input => {
+    const {output} = await prompt({ text: input.text });
     return output!;
   }
 );
