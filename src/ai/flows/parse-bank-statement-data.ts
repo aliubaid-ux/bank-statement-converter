@@ -38,7 +38,7 @@ export async function parseBankStatementData(input: ParseBankStatementDataInput)
   return parseBankStatementDataFlow(input);
 }
 
-const parseBankStatementDataFlow = ai.defineFlow(
+const parseBankStatementDataFlow = genkitAI.defineFlow(
   {
     name: 'parseBankStatementDataFlow',
     inputSchema: ParseBankStatementDataInputSchema,
