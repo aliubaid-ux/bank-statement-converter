@@ -57,75 +57,105 @@ type Transaction = {
 
 const MAX_FILE_SIZE = 20 * 1024 * 1024; // 20 MB
 
-// Simple client-side parser using Regex. This is a best-effort approach
-// and may not work for all bank statement formats.
+// Improved client-side parser
 function parseTransactionsFromText(text: string): Transaction[] {
-    const transactions: Transaction[] = [];
-    // Regex to find lines that look like transactions. This is a very generic regex.
-    // It looks for a date, some text, and at least one monetary amount.
-    // Date (MM/DD/YYYY, YYYY-MM-DD, DD Mon YYYY), Description (any chars), Amounts (e.g., 1,234.56)
-    const transactionRegex = /(\d{1,2}\/\d{1,2}\/\d{2,4}|\d{4}-\d{2}-\d{2}|\d{1,2} [A-Za-z]{3} \d{4})\s+(.*?)\s+((?:-?\$?[\d,]+(?:\.\d{2})?))\s*((?:-?\$?[\d,]+(?:\.\d{2})?))?\s*((?:-?\$?[\d,]+(?:\.\d{2})?))?/;
+  const transactions: Transaction[] = [];
+  const lines = text.split('\n').filter(line => line.trim() !== '');
+
+  // Common date formats: MM/DD, MM/DD/YYYY, YYYY-MM-DD, DD Mon YYYY
+  const dateRegex = /(?:\d{1,2}\/\d{1,2}(?:\/\d{2,4})?|\d{4}-\d{2}-\d{2}|\d{1,2} [A-Za-z]{3} \d{4})/;
+  // Monetary amount: 1,234.56 or 1234.56, possibly with a negative sign
+  const amountRegex = /-?\$?[\d,]+(?:\.\d{2})/;
+
+  let potentialTransactionLines: { text: string; index: number }[] = [];
+
+  // First pass: identify lines that look like transactions
+  lines.forEach((line, index) => {
+    // A potential transaction line has a date and at least one monetary amount
+    if (dateRegex.test(line) && amountRegex.test(line)) {
+      potentialTransactionLines.push({ text: line, index });
+    }
+  });
+
+  if (potentialTransactionLines.length === 0) {
+    return [];
+  }
+
+  // Second pass: process potential transactions and merge multi-line descriptions
+  for (let i = 0; i < potentialTransactionLines.length; i++) {
+    let currentLine = potentialTransactionLines[i];
+    let description = currentLine.text;
+
+    // Check for multi-line descriptions between this and the next transaction
+    const nextTransactionIndex = (i + 1 < potentialTransactionLines.length) ? potentialTransactionLines[i + 1].index : lines.length;
     
-    const lines = text.split('\n');
-
-    for (const line of lines) {
-        const match = line.match(transactionRegex);
-        if (match) {
-            try {
-                const [, date, description, ...amounts] = match;
-
-                const parsedAmounts = amounts
-                    .filter(a => a) // Filter out undefined captures
-                    .map(a => parseFloat(a.replace(/[$,]/g, '')));
-                
-                let debit: number | undefined;
-                let credit: number | undefined;
-                let balance: number | undefined;
-
-                if (parsedAmounts.length === 3) {
-                    [debit, credit, balance] = parsedAmounts;
-                } else if (parsedAmounts.length === 2) {
-                     // Heuristic: smaller amount is transaction, larger is balance
-                    if (Math.abs(parsedAmounts[0]) < Math.abs(parsedAmounts[1])) {
-                        if (parsedAmounts[0] < 0) debit = -parsedAmounts[0];
-                        else credit = parsedAmounts[0];
-                        balance = parsedAmounts[1];
-                    } else {
-                        debit = parsedAmounts[0];
-                        credit = undefined;
-                        balance = parsedAmounts[1];
-                    }
-                } else if (parsedAmounts.length === 1) {
-                    if (parsedAmounts[0] < 0) debit = -parsedAmounts[0];
-                    else credit = parsedAmounts[0];
-                }
-
-                // Disambiguate debit/credit if they are in the same column
-                if (debit && credit && debit > 0 && credit > 0) {
-                    // This case is ambiguous. Maybe one is always zero?
-                    // Simple guess: If description has "payment" or "credit", it's a credit.
-                    if (/payment|credit/i.test(description)) {
-                        credit = debit;
-                        debit = undefined;
-                    }
-                }
-
-
-                transactions.push({
-                    date: new Date(date).toISOString().split('T')[0], // Normalize date
-                    description: description.trim().replace(/\s+/g, ' '),
-                    debit,
-                    credit,
-                    balance
-                });
-            } catch (e) {
-                // Ignore lines that match but fail to parse
-                console.warn("Skipping line, failed to parse:", line);
-            }
+    for (let j = currentLine.index + 1; j < nextTransactionIndex; j++) {
+        const betweenLine = lines[j];
+        // If a line between transactions doesn't have a date or amount, it's likely part of the description
+        if (!dateRegex.test(betweenLine) && !amountRegex.test(betweenLine)) {
+            description += ' ' + betweenLine.trim();
         }
     }
+    
+    description = description.replace(/\s+/g, ' ').trim();
 
-    return transactions;
+    const dateMatch = description.match(dateRegex);
+    if (!dateMatch) continue;
+    const date = new Date(dateMatch[0]).toISOString().split('T')[0];
+
+    // Remove the date from the description to clean it up
+    description = description.substring(dateMatch.index! + dateMatch[0].length).trim();
+
+    const amounts = description.match(new RegExp(amountRegex, 'g'))?.map(a => parseFloat(a.replace(/[$,]/g, '')));
+    if (!amounts || amounts.length === 0) continue;
+
+    description = description.replace(new RegExp(amountRegex, 'g'), '').trim();
+
+    let debit: number | undefined;
+    let credit: number | undefined;
+    let balance: number | undefined;
+
+    // Logic to assign amounts to debit, credit, balance
+    if (amounts.length === 1) {
+        const amount = amounts[0];
+        if (amount < 0) {
+            debit = -amount;
+        } else {
+            credit = amount;
+        }
+    } else if (amounts.length === 2) {
+        // Assume [transaction, balance]
+        const [amount1, amount2] = amounts;
+        const transactionAmount = Math.abs(amount1) < Math.abs(amount2) ? amount1 : amount2;
+        balance = Math.abs(amount1) > Math.abs(amount2) ? amount1 : amount2;
+        if (transactionAmount < 0) {
+            debit = -transactionAmount;
+        } else {
+            credit = transactionAmount;
+        }
+    } else if (amounts.length >= 3) {
+        // Assume [debit, credit, balance] but need to check for 0s
+        const possibleDebit = amounts[0];
+        const possibleCredit = amounts[1];
+        balance = amounts[2];
+        
+        if (possibleDebit > 0) debit = possibleDebit;
+        if (possibleCredit > 0) credit = possibleCredit;
+    }
+    
+    // Final cleanup for description
+    description = description.replace(/purchase authorized on/i, '').trim();
+
+    transactions.push({
+      date,
+      description,
+      debit,
+      credit,
+      balance
+    });
+  }
+
+  return transactions;
 }
 
 
@@ -138,7 +168,6 @@ export function HomePage() {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    // Required for pdf.js to work in Next.js
     pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.mjs`;
   }, []);
   
@@ -192,15 +221,16 @@ export function HomePage() {
         setStatus("parsing-text");
         const pdf = await pdfjsLib.getDocument(typedarray).promise;
         let fullText = "";
-
+        
+        let extractedItems = 0;
         for (let i = 1; i <= pdf.numPages; i++) {
           const page = await pdf.getPage(i);
           const textContent = await page.getTextContent();
-          fullText += textContent.items.map((item: any) => item.str).join(" ");
+          extractedItems += textContent.items.length;
+          fullText += textContent.items.map((item: any) => item.str).join("\n");
         }
 
-        if (fullText.trim().length < 100) {
-          // Fallback to OCR if digital text extraction is poor
+        if (fullText.trim().length < 100 || extractedItems < 10) {
           setStatus("parsing-ocr");
           let ocrText = "";
           const worker = await Tesseract.createWorker({
@@ -229,7 +259,6 @@ export function HomePage() {
         }
 
         setStatus("processing");
-        // Use client-side parsing instead of AI
         const result = parseTransactionsFromText(fullText);
         
         if (result && result.length > 0) {
