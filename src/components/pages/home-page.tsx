@@ -17,10 +17,6 @@ import * as pdfjsLib from "pdfjs-dist";
 import Tesseract from "tesseract.js";
 import * as XLSX from "xlsx";
 
-import {
-  parseBankStatementData,
-  type ParseBankStatementDataOutput,
-} from "@/ai/flows/parse-bank-statement-data";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -47,13 +43,91 @@ type Status =
   | "reading"
   | "parsing-text"
   | "parsing-ocr"
-  | "processing-ai"
+  | "processing"
   | "success"
   | "error";
 
-type Transaction = ParseBankStatementDataOutput["transactions"][0];
+type Transaction = {
+    date: string;
+    description: string;
+    debit?: number;
+    credit?: number;
+    balance?: number;
+};
 
 const MAX_FILE_SIZE = 20 * 1024 * 1024; // 20 MB
+
+// Simple client-side parser using Regex. This is a best-effort approach
+// and may not work for all bank statement formats.
+function parseTransactionsFromText(text: string): Transaction[] {
+    const transactions: Transaction[] = [];
+    // Regex to find lines that look like transactions. This is a very generic regex.
+    // It looks for a date, some text, and at least one monetary amount.
+    // Date (MM/DD/YYYY, YYYY-MM-DD, DD Mon YYYY), Description (any chars), Amounts (e.g., 1,234.56)
+    const transactionRegex = /(\d{1,2}\/\d{1,2}\/\d{2,4}|\d{4}-\d{2}-\d{2}|\d{1,2} [A-Za-z]{3} \d{4})\s+(.*?)\s+((?:-?\$?[\d,]+(?:\.\d{2})?))\s*((?:-?\$?[\d,]+(?:\.\d{2})?))?\s*((?:-?\$?[\d,]+(?:\.\d{2})?))?/;
+    
+    const lines = text.split('\n');
+
+    for (const line of lines) {
+        const match = line.match(transactionRegex);
+        if (match) {
+            try {
+                const [, date, description, ...amounts] = match;
+
+                const parsedAmounts = amounts
+                    .filter(a => a) // Filter out undefined captures
+                    .map(a => parseFloat(a.replace(/[$,]/g, '')));
+                
+                let debit: number | undefined;
+                let credit: number | undefined;
+                let balance: number | undefined;
+
+                if (parsedAmounts.length === 3) {
+                    [debit, credit, balance] = parsedAmounts;
+                } else if (parsedAmounts.length === 2) {
+                     // Heuristic: smaller amount is transaction, larger is balance
+                    if (Math.abs(parsedAmounts[0]) < Math.abs(parsedAmounts[1])) {
+                        if (parsedAmounts[0] < 0) debit = -parsedAmounts[0];
+                        else credit = parsedAmounts[0];
+                        balance = parsedAmounts[1];
+                    } else {
+                        debit = parsedAmounts[0];
+                        credit = undefined;
+                        balance = parsedAmounts[1];
+                    }
+                } else if (parsedAmounts.length === 1) {
+                    if (parsedAmounts[0] < 0) debit = -parsedAmounts[0];
+                    else credit = parsedAmounts[0];
+                }
+
+                // Disambiguate debit/credit if they are in the same column
+                if (debit && credit && debit > 0 && credit > 0) {
+                    // This case is ambiguous. Maybe one is always zero?
+                    // Simple guess: If description has "payment" or "credit", it's a credit.
+                    if (/payment|credit/i.test(description)) {
+                        credit = debit;
+                        debit = undefined;
+                    }
+                }
+
+
+                transactions.push({
+                    date: new Date(date).toISOString().split('T')[0], // Normalize date
+                    description: description.trim().replace(/\s+/g, ' '),
+                    debit,
+                    credit,
+                    balance
+                });
+            } catch (e) {
+                // Ignore lines that match but fail to parse
+                console.warn("Skipping line, failed to parse:", line);
+            }
+        }
+    }
+
+    return transactions;
+}
+
 
 export function HomePage() {
   const [file, setFile] = useState<File | null>(null);
@@ -154,14 +228,15 @@ export function HomePage() {
           fullText = ocrText;
         }
 
-        setStatus("processing-ai");
-        const result = await parseBankStatementData({ text: fullText });
+        setStatus("processing");
+        // Use client-side parsing instead of AI
+        const result = parseTransactionsFromText(fullText);
         
-        if (result.transactions && result.transactions.length > 0) {
-            setTransactions(result.transactions);
+        if (result && result.length > 0) {
+            setTransactions(result);
             setStatus("success");
         } else {
-            setError("No transactions were found. The document might not be a bank statement or is in an unsupported format.");
+            setError("No transactions were found. The document might be in an unsupported format. This non-AI parser is less flexible.");
             setStatus("error");
         }
       };
@@ -208,12 +283,12 @@ export function HomePage() {
     reading: { icon: <Loader className="animate-spin" />, text: "Reading file..." },
     "parsing-text": { icon: <Loader className="animate-spin" />, text: "Extracting text..." },
     "parsing-ocr": { icon: <Loader className="animate-spin" />, text: "Performing OCR..." },
-    "processing-ai": { icon: <Loader className="animate-spin" />, text: "Analyzing data with AI..." },
+    processing: { icon: <Loader className="animate-spin" />, text: "Parsing data..." },
     success: { icon: <CheckCircle2 className="text-green-500" />, text: "Processing complete!" },
     error: { icon: <AlertTriangle className="text-destructive" />, text: "An error occurred." },
   };
 
-  const isProcessing = ["reading", "parsing-text", "parsing-ocr", "processing-ai"].includes(status);
+  const isProcessing = ["reading", "parsing-text", "parsing-ocr", "processing"].includes(status);
 
   return (
     <div className="container mx-auto px-4 sm:px-6 lg:px-8 py-12">
@@ -280,7 +355,7 @@ export function HomePage() {
                   {statusInfo[status].icon}
                   <span>{statusInfo[status].text}</span>
                 </div>
-                {(status === "parsing-ocr" || status === "processing-ai") && (
+                {(status === "parsing-ocr") && (
                   <Progress value={progress} className="w-full" />
                 )}
                 {file && <p className="text-muted-foreground mt-4">{file.name}</p>}

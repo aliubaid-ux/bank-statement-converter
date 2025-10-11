@@ -23,6 +23,7 @@ export default function PrivacyPage() {
                 <h3 className="font-semibold text-lg mb-2">What We DO NOT Do:</h3>
                 <ul className="list-disc list-inside space-y-2 text-sm">
                     <li>We DO NOT upload your PDF files to any server.</li>
+                    <li>We DO NOT use any external AI or third-party data processing services.</li>
                     <li>We DO NOT store your data, even temporarily.</li>
                     <li>We DO NOT use third-party analytics that track your activity.</li>
                     <li>We DO NOT use cookies for tracking or identification.</li>
@@ -34,7 +35,7 @@ export default function PrivacyPage() {
                 <ul className="list-disc list-inside space-y-2 text-sm">
                     <li>All file reading and data processing happens locally in your browser.</li>
                     <li>We use in-browser technologies like Javascript, pdf.js, and Tesseract.js.</li>
-                    <li>The extracted text is sent to a secure AI service for processing, but is not stored or linked to you.</li>
+                    <li>The extracted text is parsed locally by your browser.</li>
                     <li>All data is cleared from your browser's memory when you close the page.</li>
                 </ul>
             </div>
@@ -46,11 +47,10 @@ export default function PrivacyPage() {
               <li>You select or drop a PDF file onto the page.</li>
               <li>Your browser's Javascript reads the file into its local memory.</li>
               <li>The text is extracted or OCR'd, still within your browser.</li>
-              <li>The raw, anonymized text is sent for AI analysis to structure it.</li>
-              <li>The structured data is returned to your browser.</li>
+              <li>Your browser parses the text to find transactions.</li>
               <li>You download the converted file directly to your computer.</li>
             </ol>
-            <p className="mt-4 font-medium">At no point in this process is your original file uploaded.</p>
+            <p className="mt-4 font-medium">At no point in this process is your file or its content sent to a server.</p>
           </section>
         </CardContent>
       </Card>

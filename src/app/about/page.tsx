@@ -32,7 +32,7 @@ export default function AboutPage() {
               <li><strong>Next.js & React:</strong> Powers our fast and responsive user interface.</li>
               <li><strong>pdf.js:</strong> A library from Mozilla that allows us to extract text directly from digital PDFs in the browser.</li>
               <li><strong>Tesseract.js:</strong> For scanned (image-based) PDFs, this powerful Optical Character Recognition (OCR) engine reads the text from images.</li>
-              <li><strong>Genkit AI:</strong> We leverage a secure AI flow to intelligently parse the extracted text, identify transaction tables, and normalize the data into a clean, usable format.</li>
+              <li><strong>Client-Side Parsing:</strong> We use regular expressions within the browser to identify and extract transaction data, ensuring nothing is sent to a server.</li>
               <li><strong>SheetJS (xlsx):</strong> This library enables the instant creation of Excel and CSV files right from your browser.</li>
             </ul>
           </section>
