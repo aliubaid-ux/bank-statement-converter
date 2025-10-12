@@ -66,6 +66,7 @@ function parseTextItemsToRows(items: TextItem[]): RowData[] {
 
     // Group items into lines based on vertical position
     items.forEach(item => {
+        if (!item.str.trim()) return;
         const y = item.transform[5];
         let found = false;
         for (const lineY of lines.keys()) {
@@ -93,7 +94,10 @@ function parseTextItemsToRows(items: TextItem[]): RowData[] {
         const row: string[] = [];
         let currentCell = '';
         
-        const avgCharWidth = lineItems.reduce((acc, item) => acc + (item.width / Math.max(1, item.str.length)), 0) / lineItems.length;
+        // Calculate a dynamic space threshold based on average character width
+        const totalWidth = lineItems.reduce((acc, item) => acc + item.width, 0);
+        const totalChars = lineItems.reduce((acc, item) => acc + item.str.length, 0);
+        const avgCharWidth = totalChars > 0 ? totalWidth / totalChars : 10; // Default to 10 if no chars
         const spaceThreshold = avgCharWidth * 2; // A gap of 2 characters is a new column
 
         for (let i = 0; i < lineItems.length; i++) {
@@ -102,12 +106,15 @@ function parseTextItemsToRows(items: TextItem[]): RowData[] {
                 currentCell = item.str;
             } else {
                 const prevItem = lineItems[i-1];
-                const gap = item.transform[4] - (prevItem.transform[4] + prevItem.width);
+                const prevItemEndX = prevItem.transform[4] + prevItem.width;
+                const currentItemStartX = item.transform[4];
+                const gap = currentItemStartX - prevItemEndX;
                 
                 if (gap > spaceThreshold) {
                     row.push(currentCell.trim());
                     currentCell = item.str;
                 } else {
+                     // If gap is small, add a space if it's not already there
                     currentCell += (gap > 0 ? ' ' : '') + item.str;
                 }
             }
@@ -116,7 +123,7 @@ function parseTextItemsToRows(items: TextItem[]): RowData[] {
             row.push(currentCell.trim());
         }
 
-        if (row.length > 0) {
+        if (row.some(cell => cell)) {
             rows.push(row);
         }
     });
@@ -200,12 +207,10 @@ export function HomePage() {
       const pdf = await pdfjsLib.getDocument(typedarray).promise;
       
       let allTextItems: TextItem[] = [];
-      let pageTexts: string[] = [];
 
       for (let i = 1; i <= pdf.numPages; i++) {
         const page = await pdf.getPage(i);
         const textContent = await page.getTextContent();
-        pageTexts.push(textContent.items.map(item => (item as TextItem).str).join(' '));
         allTextItems.push(...textContent.items.map(item => item as TextItem));
       }
 
@@ -225,7 +230,7 @@ export function HomePage() {
         await worker.loadLanguage('eng');
         await worker.initialize('eng');
         await worker.setParameters({
-            tessedit_pageseg_mode: Tesseract.PSM.AUTO,
+            tessedit_pageseg_mode: Tesseract.PSM.AUTO_OSD,
             preserve_interword_spaces: '1',
         });
 
@@ -313,7 +318,7 @@ export function HomePage() {
                 escapedCell = `"${escapedCell}"`;
             }
             return escapedCell;
-        }).join(',')
+        }).join('\t') // Use tab separator for direct pasting into sheets
     ).join('\n');
 
     navigator.clipboard.writeText(csvContent).then(() => {
