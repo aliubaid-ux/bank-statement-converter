@@ -115,7 +115,7 @@ function parseTextItemsToRows(items: TextItem[]): RowData[] {
                     currentCell = item.str;
                 } else {
                      // If gap is small, add a space if it's not already there
-                    currentCell += (gap > 0 ? ' ' : '') + item.str;
+                    currentCell += (gap > 0.1 ? ' ' : '') + item.str;
                 }
             }
         }
@@ -207,11 +207,15 @@ export function HomePage() {
       const pdf = await pdfjsLib.getDocument(typedarray).promise;
       
       let allTextItems: TextItem[] = [];
+      let pageTexts: string[] = [];
 
       for (let i = 1; i <= pdf.numPages; i++) {
         const page = await pdf.getPage(i);
         const textContent = await page.getTextContent();
-        allTextItems.push(...textContent.items.map(item => item as TextItem));
+        if (textContent.items.length > 0) {
+            allTextItems.push(...textContent.items.map(item => item as TextItem));
+        }
+        pageTexts.push((await page.getTextContent()).items.map(item => (item as TextItem).str).join(' '));
       }
 
       // If very little text was extracted, it's likely a scanned/image-based PDF.
@@ -230,7 +234,7 @@ export function HomePage() {
         await worker.loadLanguage('eng');
         await worker.initialize('eng');
         await worker.setParameters({
-            tessedit_pageseg_mode: Tesseract.PSM.AUTO_OSD,
+            tessedit_pageseg_mode: Tesseract.PSM.AUTO,
             preserve_interword_spaces: '1',
         });
 
@@ -305,7 +309,7 @@ export function HomePage() {
     [extractedData, file]
   );
   
-    const handleCopyToClipboard = useCallback(() => {
+    const handleOpenInSheets = useCallback(() => {
     if (extractedData.length === 0) return;
 
     const csvContent = extractedData.map(row => 
@@ -322,15 +326,16 @@ export function HomePage() {
     ).join('\n');
 
     navigator.clipboard.writeText(csvContent).then(() => {
+        window.open("https://docs.google.com/spreadsheets/create", "_blank");
         toast({
-            title: "Copied to Clipboard",
-            description: "You can now paste the data into Google Sheets or any spreadsheet app.",
+            title: "Copied & Ready to Paste",
+            description: "A new Google Sheet has been opened. Just press Ctrl+V or Cmd+V to paste your data.",
         });
     }, (err) => {
         toast({
             variant: "destructive",
             title: "Copy Failed",
-            description: "Could not copy data to clipboard. Please try again.",
+            description: "Could not copy data to clipboard. Please use the CSV or Excel export options.",
         });
         console.error('Failed to copy text: ', err);
     });
@@ -449,8 +454,8 @@ export function HomePage() {
                     <Button onClick={() => handleExport("xlsx")} size="lg">
                       <FileSpreadsheet /> Excel (.xlsx)
                     </Button>
-                     <Button onClick={handleCopyToClipboard} size="lg" variant="secondary">
-                        <Clipboard /> Copy for Sheets
+                     <Button onClick={handleOpenInSheets} size="lg" variant="secondary">
+                        <Clipboard /> Open in Google Sheets
                     </Button>
                     <Button onClick={() => handleExport("csv")} size="lg" variant="outline">
                       <TableIcon /> CSV (.csv)
