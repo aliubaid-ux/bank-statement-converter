@@ -12,7 +12,7 @@ import {
   FileSpreadsheet,
   Table as TableIcon,
   RotateCcw,
-  Sheet,
+  Clipboard,
 } from "lucide-react";
 import * as pdfjsLib from "pdfjs-dist";
 import type { TextItem } from "pdfjs-dist/types/src/display/api";
@@ -40,6 +40,7 @@ import {
     TableRow,
   } from "@/components/ui/table";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Logo } from "../icons/logo";
 
 type Status =
   | "idle"
@@ -60,103 +61,69 @@ function parseTextItemsToRows(items: TextItem[]): RowData[] {
         return [];
     }
 
-    // Sort items by their vertical position, then horizontal
+    // Sort items primarily by their vertical position, then horizontal
     items.sort((a, b) => {
-        if (a.transform[5] > b.transform[5]) return -1;
-        if (a.transform[5] < b.transform[5]) return 1;
-        if (a.transform[4] < b.transform[4]) return -1;
-        if (a.transform[4] > b.transform[4]) return 1;
-        return 0;
+        const yA = a.transform[5];
+        const yB = b.transform[5];
+        const xA = a.transform[4];
+        const xB = b.transform[4];
+
+        if (Math.abs(yA - yB) > 2) { // Epsilon for vertical alignment
+            return yB - yA; // Higher Y value (lower on page) first
+        }
+        return xA - xB;
     });
 
-    const lines: TextItem[][] = [];
-    let currentLine: TextItem[] = [];
-    let lastY = -1;
-    const Y_TOLERANCE = 5; // How close in vertical pixels items need to be to be on the same line
+    const lines: { items: TextItem[], y: number }[] = [];
+    if (items.length > 0) {
+        let currentLine = { items: [items[0]], y: items[0].transform[5] };
 
-    for (const item of items) {
-        if (item.str.trim() === '') continue;
+        for (let i = 1; i < items.length; i++) {
+            const item = items[i];
+            const prevItem = items[i - 1];
 
-        const currentY = item.transform[5];
-
-        if (lastY === -1 || Math.abs(currentY - lastY) < Y_TOLERANCE) {
-            currentLine.push(item);
-        } else {
-            if (currentLine.length > 0) {
-                // Sort items on the line by their horizontal position before pushing
-                lines.push(currentLine.sort((a, b) => a.transform[4] - b.transform[4]));
-            }
-            currentLine = [item];
-        }
-        lastY = currentY;
-    }
-    if (currentLine.length > 0) {
-        lines.push(currentLine.sort((a, b) => a.transform[4] - b.transform[4]));
-    }
-
-    // This part is a heuristic to find column boundaries based on text item positions.
-    const columnBoundaries: number[] = [];
-    const avgCharWidth = 8; // Assumed average character width for estimating column splits
-
-    lines.forEach(line => {
-        for (let i = 0; i < line.length - 1; i++) {
-            const currentItem = line[i];
-            const nextItem = line[i+1];
-            const gap = nextItem.transform[4] - (currentItem.transform[4] + currentItem.width);
-            
-            // If there's a significant gap, it's likely a new column.
-            if (gap > avgCharWidth * 2) {
-                const boundary = currentItem.transform[4] + currentItem.width + gap / 2;
-                // Add boundary if it's not close to an existing one.
-                if (!columnBoundaries.some(b => Math.abs(b - boundary) < avgCharWidth)) {
-                    columnBoundaries.push(boundary);
-                }
+            // If the vertical position is similar, it's the same line
+            if (Math.abs(item.transform[5] - prevItem.transform[5]) < 5) {
+                currentLine.items.push(item);
+            } else {
+                // New line
+                lines.push(currentLine);
+                currentLine = { items: [item], y: item.transform[5] };
             }
         }
-    });
-    columnBoundaries.sort((a, b) => a - b);
+        lines.push(currentLine); // Push the last line
+    }
 
-    // Now, create the final rows by assigning text to columns.
-    const finalRows: RowData[] = [];
-    lines.forEach(line => {
-        if (line.length === 0) return;
+    const avgCharWidth = items.reduce((acc, item) => acc + (item.width / item.str.length), 0) / items.length;
+    const SPACE_THRESHOLD = avgCharWidth * 2.5;
 
-        // If there's only one item on the line, treat it as a full-width row.
-        if (line.length === 1) {
-            finalRows.push([line[0].str]);
-            return;
-        }
-
+    return lines.map(line => {
+        if (line.items.length === 1) return [line.items[0].str];
+        
         const row: string[] = [];
-        let currentColumnIndex = 0;
-        let currentColumnText = "";
+        let currentCell = line.items[0].str;
+        
+        for (let i = 1; i < line.items.length; i++) {
+            const prev = line.items[i-1];
+            const curr = line.items[i];
+            const gap = curr.transform[4] - (prev.transform[4] + prev.width);
 
-        for(const item of line) {
-            if (currentColumnIndex < columnBoundaries.length && item.transform[4] > columnBoundaries[currentColumnIndex]) {
-                row.push(currentColumnText.trim());
-                currentColumnText = "";
-                currentColumnIndex++;
-                // Skip empty columns
-                while (currentColumnIndex < columnBoundaries.length && item.transform[4] > columnBoundaries[currentColumnIndex]) {
-                    row.push("");
-                    currentColumnIndex++;
+            if (gap > SPACE_THRESHOLD) {
+                row.push(currentCell.trim());
+                currentCell = curr.str;
+            } else {
+                // If gaps are small, items are part of the same cell. 
+                // Add a space if they are not directly touching.
+                if (gap > 1) {
+                   currentCell += " " + curr.str;
+                } else {
+                   currentCell += curr.str;
                 }
             }
-            currentColumnText += item.str + " ";
         }
-        row.push(currentColumnText.trim());
-
-        // Fill remaining columns if any
-        while(row.length < columnBoundaries.length + 1) {
-            row.push("");
-        }
-
-        if (row.some(cell => cell.trim() !== '')) {
-            finalRows.push(row);
-        }
+        row.push(currentCell.trim());
+        return row;
     });
-
-    return finalRows;
 }
 
 
@@ -170,10 +137,7 @@ function parseTextToRows(text: string): RowData[] {
 
     // Split by 2 or more spaces to identify columns
     const columns = line.split(/\s{2,}/).map(col => col.trim());
-    if (columns.length > 1) {
-        rows.push(columns);
-    } else if (columns.length === 1 && columns[0]) {
-        // Keep single-column lines if they contain content
+    if (columns.some(col => col)) {
         rows.push(columns);
     }
   }
@@ -229,89 +193,78 @@ export function HomePage() {
     setStatus("reading");
     setError(null);
     setProgress(0);
+    setExtractedData([]);
 
     try {
-      const reader = new FileReader();
-      reader.readAsArrayBuffer(selectedFile);
-      reader.onload = async (e) => {
-        if (!e.target?.result) {
-          setError("Failed to read file.");
-          setStatus("error");
-          return;
-        }
+      const typedarray = new Uint8Array(await selectedFile.arrayBuffer());
 
-        const typedarray = new Uint8Array(e.target.result as ArrayBuffer);
+      setStatus("parsing-text");
+      const pdf = await pdfjsLib.getDocument(typedarray).promise;
+      
+      let allTextItems: TextItem[] = [];
 
-        setStatus("parsing-text");
-        const pdf = await pdfjsLib.getDocument(typedarray).promise;
+      for (let i = 1; i <= pdf.numPages; i++) {
+        const page = await pdf.getPage(i);
+        const textContent = await page.getTextContent();
+        allTextItems.push(...textContent.items.map(item => item as TextItem));
+      }
+
+      // If very little text was extracted, it's likely a scanned/image-based PDF.
+      if (allTextItems.filter(item => item.str.trim()).length < 20) {
+        setStatus("parsing-ocr");
+        let fullText = "";
+        const worker = await Tesseract.createWorker({
+          logger: (m) => {
+            if (m.status === "recognizing text") {
+              setProgress(m.progress * 100);
+            }
+          },
+        });
         
-        let allTextItems: TextItem[] = [];
-        let extractedItemsCount = 0;
+        await worker.load();
+        await worker.loadLanguage('eng');
+        await worker.initialize('eng');
+        await worker.setParameters({
+            tessedit_pageseg_mode: Tesseract.PSM.AUTO,
+            preserve_interword_spaces: '1',
+        });
 
         for (let i = 1; i <= pdf.numPages; i++) {
           const page = await pdf.getPage(i);
-          const textContent = await page.getTextContent();
-          extractedItemsCount += textContent.items.length;
-          allTextItems.push(...textContent.items.map(item => item as TextItem));
+          const viewport = page.getViewport({ scale: 3.0 });
+          const canvas = document.createElement("canvas");
+          const context = canvas.getContext("2d")!;
+          canvas.height = viewport.height;
+          canvas.width = viewport.width;
+          await page.render({ canvasContext: context, viewport }).promise;
+          const { data: { text } } = await worker.recognize(canvas);
+          fullText += text + "\n";
         }
+        await worker.terminate();
 
-        // If very little text was extracted, it's likely a scanned/image-based PDF.
-        if (extractedItemsCount < 20) {
-          setStatus("parsing-ocr");
-          let fullText = "";
-          const worker = await Tesseract.createWorker({
-            logger: (m) => {
-              if (m.status === "recognizing text") {
-                setProgress(m.progress * 100);
-              }
-            },
-          });
-          
-          await worker.load();
-          await worker.loadLanguage('eng');
-          await worker.initialize('eng');
-          await worker.setParameters({
-              tessedit_pageseg_mode: Tesseract.PSM.AUTO,
-              preserve_interword_spaces: '1',
-          });
-
-          for (let i = 1; i <= pdf.numPages; i++) {
-            const page = await pdf.getPage(i);
-            const viewport = page.getViewport({ scale: 2.5 });
-            const canvas = document.createElement("canvas");
-            const context = canvas.getContext("2d")!;
-            canvas.height = viewport.height;
-            canvas.width = viewport.width;
-            await page.render({ canvasContext: context, viewport }).promise;
-            const { data: { text } } = await worker.recognize(canvas);
-            fullText += text + "\n";
-          }
-          await worker.terminate();
-
-          setStatus("processing");
-          const result = parseTextToRows(fullText);
-          if (result && result.length > 0) {
-            setExtractedData(result);
-            setStatus("success");
-          } else {
-            setError("OCR failed to extract any data. The document might be unreadable.");
-            setStatus("error");
-          }
+        setStatus("processing");
+        const result = parseTextToRows(fullText);
+        if (result && result.length > 0) {
+          setExtractedData(result);
+          setStatus("success");
         } else {
-            setStatus("processing");
-            const result = parseTextItemsToRows(allTextItems);
-            if (result && result.length > 0) {
-                setExtractedData(result);
-                setStatus("success");
-            } else {
-                setError("No data could be extracted. The document might be empty or in an unsupported format.");
-                setStatus("error");
-            }
+          setError("OCR failed to extract readable data. The document might be low quality or unreadable.");
+          setStatus("error");
         }
-      };
+      } else {
+          setStatus("processing");
+          const result = parseTextItemsToRows(allTextItems);
+          if (result && result.length > 0) {
+              setExtractedData(result);
+              setStatus("success");
+          } else {
+              setError("No data could be extracted. The document might be empty or in an unsupported format.");
+              setStatus("error");
+          }
+      }
     } catch (err: any)
     {
-      console.error(err);
+      console.error("Processing Error:", err);
       setError(err.message || "An unexpected error occurred during processing.");
       setStatus("error");
     }
@@ -329,7 +282,7 @@ export function HomePage() {
         const url = URL.createObjectURL(blob);
         const link = document.createElement("a");
         link.href = url;
-        link.download = `${file?.name.replace(".pdf", "")}.json`;
+        link.download = `${file?.name.replace(/\.pdf$/i, "")}.json`;
         document.body.appendChild(link);
         link.click();
         document.body.removeChild(link);
@@ -341,11 +294,43 @@ export function HomePage() {
       XLSX.utils.book_append_sheet(workbook, worksheet, "Sheet1");
       XLSX.writeFile(
         workbook,
-        `${file?.name.replace(".pdf", "")}.${format}`
+        `${file?.name.replace(/\.pdf$/i, "")}.${format}`
       );
     },
     [extractedData, file]
   );
+  
+    const handleCopyToClipboard = useCallback(() => {
+    if (extractedData.length === 0) return;
+
+    const csvContent = extractedData.map(row => 
+        row.map(cell => {
+            const newCell = cell || '';
+            // Escape quotes by doubling them
+            let escapedCell = newCell.replace(/"/g, '""');
+            // If cell contains comma, newline, or quote, wrap it in quotes
+            if (escapedCell.includes(',') || escapedCell.includes('\n') || escapedCell.includes('"')) {
+                escapedCell = `"${escapedCell}"`;
+            }
+            return escapedCell;
+        }).join(',')
+    ).join('\n');
+
+    navigator.clipboard.writeText(csvContent).then(() => {
+        toast({
+            title: "Copied to Clipboard",
+            description: "You can now paste the data into Google Sheets or any spreadsheet app.",
+        });
+    }, (err) => {
+        toast({
+            variant: "destructive",
+            title: "Copy Failed",
+            description: "Could not copy data to clipboard. Please try again.",
+        });
+        console.error('Failed to copy text: ', err);
+    });
+}, [extractedData, toast]);
+
 
   const statusInfo: Record<Status, { icon: React.ReactNode; text: string }> = {
     idle: { icon: null, text: "" },
@@ -370,7 +355,7 @@ export function HomePage() {
             Bank Statement Converter
           </CardTitle>
           <CardDescription className="text-lg">
-            Convert your PDF bank statements instantly — 100% private and secure.
+            Convert PDF bank statements into structured data — 100% private and free.
           </CardDescription>
         </CardHeader>
         <CardContent className="p-8">
@@ -385,15 +370,20 @@ export function HomePage() {
                 <div
                   className={cn(
                     "relative flex flex-col items-center justify-center p-12 border-2 border-dashed rounded-lg transition-colors",
-                    status === "dragging" ? "border-primary bg-accent" : "border-border"
+                    status === "dragging" ? "border-primary bg-accent/50" : "border-border hover:border-primary/50"
                   )}
-                  onDragOver={(e) => e.preventDefault()}
+                  onDragOver={(e) => {
+                    e.preventDefault();
+                    setStatus("dragging");
+                  }}
                   onDragEnter={() => setStatus("dragging")}
                   onDragLeave={() => setStatus("idle")}
                   onDrop={(e) => {
                     e.preventDefault();
                     setStatus("idle");
-                    handleFile(e.dataTransfer.files?.[0]);
+                    if (e.dataTransfer.files?.length) {
+                       handleFile(e.dataTransfer.files[0]);
+                    }
                   }}
                 >
                   <FileUp className="h-16 w-16 text-muted-foreground mb-4" />
@@ -403,7 +393,7 @@ export function HomePage() {
                   <input
                     type="file"
                     accept="application/pdf"
-                    onChange={(e) => handleFile(e.target.files?.[0])}
+                    onChange={(e) => handleFile(e.target.files?.[0] ?? null)}
                     className="hidden"
                     ref={fileInputRef}
                   />
@@ -411,7 +401,7 @@ export function HomePage() {
                     Choose File
                   </Button>
                   <p className="text-xs text-muted-foreground mt-4">
-                    Up to 20MB. All processing happens in your browser.
+                    Up to 20MB. All processing happens securely in your browser.
                   </p>
                 </div>
               </motion.div>
@@ -445,26 +435,23 @@ export function HomePage() {
                     <span>Success! Extracted {extractedData.length} rows.</span>
                   </div>
                   <p className="text-muted-foreground">{file?.name}</p>
-                   <p className="text-sm text-muted-foreground mt-2">Your data is ready to be downloaded.</p>
+                   <p className="text-sm text-muted-foreground mt-2">Your data is ready to be downloaded or copied.</p>
                 </div>
 
                 <div className="space-y-4">
-                  <h3 className="text-lg font-semibold text-center">Download as:</h3>
+                  <h3 className="text-lg font-semibold text-center">Export Options</h3>
                   <div className="flex flex-wrap justify-center gap-4">
                     <Button onClick={() => handleExport("xlsx")} size="lg">
                       <FileSpreadsheet /> Excel (.xlsx)
                     </Button>
-                    <Button onClick={() => handleExport("csv")} size="lg" variant="secondary">
+                     <Button onClick={handleCopyToClipboard} size="lg" variant="secondary">
+                        <Clipboard /> Copy for Sheets
+                    </Button>
+                    <Button onClick={() => handleExport("csv")} size="lg" variant="outline">
                       <TableIcon /> CSV (.csv)
                     </Button>
-                    <Button onClick={() => handleExport("json")} size="lg" variant="secondary">
+                    <Button onClick={() => handleExport("json")} size="lg" variant="outline">
                       <FileJson /> JSON (.json)
-                    </Button>
-                     <Button 
-                        onClick={() => toast({ title: "Coming Soon!", description: "Direct import to Google Sheets is on its way."})} 
-                        size="lg" 
-                        variant="secondary">
-                      <Sheet /> Google Sheets
                     </Button>
                   </div>
                 </div>
@@ -481,15 +468,20 @@ export function HomePage() {
                                 </TableRow>
                             </TableHeader>
                             <TableBody>
-                                {extractedData.map((row, rowIndex) => (
+                                {extractedData.slice(0, 100).map((row, rowIndex) => ( // Preview first 100 rows
                                     <TableRow key={rowIndex}>
                                         {Array.from({ length: maxColumns }).map((_, cellIndex) => (
-                                            <TableCell key={cellIndex}>{row[cellIndex] || ''}</TableCell>
+                                            <TableCell key={cellIndex} className="text-xs whitespace-nowrap">{row[cellIndex] || ''}</TableCell>
                                         ))}
                                     </TableRow>
                                 ))}
                             </TableBody>
                         </Table>
+                         {extractedData.length > 100 && (
+                            <p className="text-center text-sm text-muted-foreground py-2">
+                                Showing first 100 rows. Full data will be in export.
+                            </p>
+                        )}
                     </ScrollArea>
                 </div>
 
