@@ -1,5 +1,1 @@
-# Firebase Studio
-
-This is a NextJS starter in Firebase Studio.
-
-To get started, take a look at src/app/page.tsx.
+A free, private, and open-source tool to convert PDF bank statements into Excel (XLSX) and CSV formats. Built with Next.js, it runs 100% in the browser.
