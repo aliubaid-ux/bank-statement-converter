@@ -61,70 +61,67 @@ function parseTextItemsToRows(items: TextItem[]): RowData[] {
         return [];
     }
 
-    // Sort items primarily by their vertical position, then horizontal
-    items.sort((a, b) => {
-        const yA = a.transform[5];
-        const yB = b.transform[5];
-        const xA = a.transform[4];
-        const xB = b.transform[4];
+    const lines = new Map<number, TextItem[]>();
+    const yTolerance = 5;
 
-        if (Math.abs(yA - yB) > 2) { // Epsilon for vertical alignment
-            return yB - yA; // Higher Y value (lower on page) first
-        }
-        return xA - xB;
-    });
-
-    const lines: { items: TextItem[], y: number }[] = [];
-    if (items.length > 0) {
-        let currentLine = { items: [items[0]], y: items[0].transform[5] };
-
-        for (let i = 1; i < items.length; i++) {
-            const item = items[i];
-            
-            // If the vertical position is similar, it's the same line
-            if (Math.abs(item.transform[5] - currentLine.y) < 5) {
-                currentLine.items.push(item);
-            } else {
-                // New line
-                lines.push(currentLine);
-                currentLine = { items: [item], y: item.transform[5] };
+    // Group items into lines based on vertical position
+    items.forEach(item => {
+        const y = item.transform[5];
+        let found = false;
+        for (const lineY of lines.keys()) {
+            if (Math.abs(y - lineY) < yTolerance) {
+                lines.get(lineY)!.push(item);
+                found = true;
+                break;
             }
         }
-        lines.push(currentLine); // Push the last line
-    }
+        if (!found) {
+            lines.set(y, [item]);
+        }
+    });
 
-    const validItems = items.filter(item => item.str.length > 0 && item.width > 0);
-    const avgCharWidth = validItems.reduce((acc, item) => acc + (item.width / item.str.length), 0) / (validItems.length || 1);
-    const SPACE_THRESHOLD = avgCharWidth * 2.5;
+    const sortedLines = Array.from(lines.entries()).sort((a, b) => b[0] - a[0]);
 
-    return lines.map(line => {
-        if (line.items.length === 0) return [];
-        if (line.items.length === 1) return [line.items[0].str.trim()];
-        
+    const rows: RowData[] = [];
+
+    sortedLines.forEach(([, lineItems]) => {
+        if (lineItems.length === 0) return;
+
+        // Sort items within the line by horizontal position
+        lineItems.sort((a, b) => a.transform[4] - b.transform[4]);
+
         const row: string[] = [];
-        let currentCell = line.items[0].str;
+        let currentCell = '';
         
-        for (let i = 1; i < line.items.length; i++) {
-            const prev = line.items[i-1];
-            const curr = line.items[i];
-            const gap = curr.transform[4] - (prev.transform[4] + prev.width);
+        const avgCharWidth = lineItems.reduce((acc, item) => acc + (item.width / Math.max(1, item.str.length)), 0) / lineItems.length;
+        const spaceThreshold = avgCharWidth * 2; // A gap of 2 characters is a new column
 
-            if (gap > SPACE_THRESHOLD) {
-                row.push(currentCell.trim());
-                currentCell = curr.str;
+        for (let i = 0; i < lineItems.length; i++) {
+            const item = lineItems[i];
+            if (currentCell === '') {
+                currentCell = item.str;
             } else {
-                // If gaps are small, items are part of the same cell. 
-                // Add a space if they are not directly touching.
-                if (gap > 1) {
-                   currentCell += " " + curr.str;
+                const prevItem = lineItems[i-1];
+                const gap = item.transform[4] - (prevItem.transform[4] + prevItem.width);
+                
+                if (gap > spaceThreshold) {
+                    row.push(currentCell.trim());
+                    currentCell = item.str;
                 } else {
-                   currentCell += curr.str;
+                    currentCell += (gap > 0 ? ' ' : '') + item.str;
                 }
             }
         }
-        row.push(currentCell.trim());
-        return row.filter(cell => cell.length > 0);
-    }).filter(row => row.length > 0);
+        if (currentCell.trim()) {
+            row.push(currentCell.trim());
+        }
+
+        if (row.length > 0) {
+            rows.push(row);
+        }
+    });
+
+    return rows;
 }
 
 
@@ -203,10 +200,12 @@ export function HomePage() {
       const pdf = await pdfjsLib.getDocument(typedarray).promise;
       
       let allTextItems: TextItem[] = [];
+      let pageTexts: string[] = [];
 
       for (let i = 1; i <= pdf.numPages; i++) {
         const page = await pdf.getPage(i);
         const textContent = await page.getTextContent();
+        pageTexts.push(textContent.items.map(item => (item as TextItem).str).join(' '));
         allTextItems.push(...textContent.items.map(item => item as TextItem));
       }
 
