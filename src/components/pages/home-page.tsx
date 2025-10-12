@@ -94,11 +94,10 @@ function parseTextItemsToRows(items: TextItem[]): RowData[] {
         const row: string[] = [];
         let currentCell = '';
         
-        // Calculate a dynamic space threshold based on average character width
         const totalWidth = lineItems.reduce((acc, item) => acc + item.width, 0);
         const totalChars = lineItems.reduce((acc, item) => acc + item.str.length, 0);
-        const avgCharWidth = totalChars > 0 ? totalWidth / totalChars : 10; // Default to 10 if no chars
-        const spaceThreshold = avgCharWidth * 2; // A gap of 2 characters is a new column
+        const avgCharWidth = totalChars > 0 ? totalWidth / totalChars : 5; 
+        const spaceThreshold = avgCharWidth * 2.5;
 
         for (let i = 0; i < lineItems.length; i++) {
             const item = lineItems[i];
@@ -114,7 +113,6 @@ function parseTextItemsToRows(items: TextItem[]): RowData[] {
                     row.push(currentCell.trim());
                     currentCell = item.str;
                 } else {
-                     // If gap is small, add a space if it's not already there
                     currentCell += (gap > 0.1 ? ' ' : '') + item.str;
                 }
             }
@@ -140,7 +138,6 @@ function parseTextToRows(text: string): RowData[] {
   for (const line of lines) {
     if (line.trim().length === 0) continue;
 
-    // Split by 2 or more spaces to identify columns
     const columns = line.split(/\s{2,}/).map(col => col.trim());
     if (columns.some(col => col)) {
         rows.push(columns);
@@ -218,7 +215,6 @@ export function HomePage() {
         pageTexts.push((await page.getTextContent()).items.map(item => (item as TextItem).str).join(' '));
       }
 
-      // If very little text was extracted, it's likely a scanned/image-based PDF.
       if (allTextItems.filter(item => item.str.trim()).length < 20) {
         setStatus("parsing-ocr");
         let fullText = "";
@@ -342,15 +338,15 @@ export function HomePage() {
 }, [extractedData, toast]);
 
 
-  const statusInfo: Record<Status, { icon: React.ReactNode; text: string }> = {
-    idle: { icon: null, text: "" },
-    dragging: { icon: null, text: "" },
-    reading: { icon: <Loader className="animate-spin" />, text: "Reading file..." },
-    "parsing-text": { icon: <Loader className="animate-spin" />, text: "Extracting text..." },
-    "parsing-ocr": { icon: <Loader className="animate-spin" />, text: "Performing OCR..." },
-    processing: { icon: <Loader className="animate-spin" />, text: "Parsing data..." },
-    success: { icon: <CheckCircle2 className="text-green-500" />, text: "Processing complete!" },
-    error: { icon: <AlertTriangle className="text-destructive" />, text: "An error occurred." },
+  const statusInfo: Record<Status, { icon: React.ReactNode; text: string, title: string }> = {
+    idle: { icon: null, text: "Convert PDF bank statements into structured data — 100% private and free.", title: "Bank Statement Converter" },
+    dragging: { icon: null, text: "Release the file to begin processing.", title: "Drop to Upload" },
+    reading: { icon: <Loader className="animate-spin" />, text: "Reading file...", title: "Reading File" },
+    "parsing-text": { icon: <Loader className="animate-spin" />, text: "Extracting text from digital PDF...", title: "Extracting Text" },
+    "parsing-ocr": { icon: <Loader className="animate-spin" />, text: "Performing OCR on scanned PDF...", title: "Reading Scanned PDF" },
+    processing: { icon: <Loader className="animate-spin" />, text: "Analyzing and parsing table data...", title: "Processing Data" },
+    success: { icon: <CheckCircle2 className="text-green-500" />, text: `Success! Extracted ${extractedData.length} rows.`, title: "Extraction Complete" },
+    error: { icon: <AlertTriangle className="text-destructive" />, text: "An error occurred during processing.", title: "Processing Failed" },
   };
 
   const isProcessing = ["reading", "parsing-text", "parsing-ocr", "processing"].includes(status);
@@ -362,10 +358,10 @@ export function HomePage() {
       <Card className="max-w-4xl mx-auto shadow-lg">
         <CardHeader className="text-center">
           <CardTitle className="text-3xl font-bold">
-            Bank Statement Converter
+            {statusInfo[status].title}
           </CardTitle>
           <CardDescription className="text-lg">
-            Convert PDF bank statements into structured data — 100% private and free.
+            {statusInfo[status].text}
           </CardDescription>
         </CardHeader>
         <CardContent className="p-8">
@@ -380,7 +376,7 @@ export function HomePage() {
                 <div
                   className={cn(
                     "relative flex flex-col items-center justify-center p-12 border-2 border-dashed rounded-lg transition-colors",
-                    status === "dragging" ? "border-primary bg-accent/50" : "border-border hover:border-primary/50"
+                    status === "dragging" ? "border-primary bg-accent" : "border-border hover:border-primary/50"
                   )}
                   onDragOver={(e) => {
                     e.preventDefault();
@@ -425,7 +421,6 @@ export function HomePage() {
               >
                 <div className="flex items-center justify-center gap-2 text-lg font-medium mb-4">
                   {statusInfo[status].icon}
-                  <span>{statusInfo[status].text}</span>
                 </div>
                 {(status === "parsing-ocr") && (
                   <Progress value={progress} className="w-full" />
@@ -440,11 +435,7 @@ export function HomePage() {
                 className="space-y-6"
               >
                 <div className="text-center">
-                  <div className="flex items-center justify-center gap-2 text-xl font-semibold mb-2">
-                    <CheckCircle2 className="h-8 w-8 text-green-500" />
-                    <span>Success! Extracted {extractedData.length} rows.</span>
-                  </div>
-                  <p className="text-muted-foreground">{file?.name}</p>
+                   <p className="text-muted-foreground">{file?.name}</p>
                    <p className="text-sm text-muted-foreground mt-2">Your data is ready to be downloaded or copied.</p>
                 </div>
 
@@ -507,7 +498,7 @@ export function HomePage() {
                >
                 <Alert variant="destructive" className="text-center">
                     <AlertTriangle className="h-6 w-6 mx-auto mb-2" />
-                    <AlertTitle className="text-xl font-bold">Processing Failed</AlertTitle>
+                    <AlertTitle className="text-xl font-bold">{statusInfo[status].title}</AlertTitle>
                     <AlertDescription className="mb-4">
                         {error}
                     </AlertDescription>
