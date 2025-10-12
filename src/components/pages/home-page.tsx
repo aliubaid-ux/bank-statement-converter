@@ -26,14 +26,6 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
-import {
-  Table as UiTable,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
 import { cn } from "@/lib/utils";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 
@@ -47,115 +39,30 @@ type Status =
   | "success"
   | "error";
 
-type Transaction = {
-    date: string;
-    description: string;
-    debit?: number;
-    credit?: number;
-    balance?: number;
-};
+// This type is now a generic array of strings, representing a row.
+type RowData = string[];
 
 const MAX_FILE_SIZE = 20 * 1024 * 1024; // 20 MB
 
-// Improved client-side parser
-function parseTransactionsFromText(text: string): Transaction[] {
-  const transactions: Transaction[] = [];
-  const lines = text.split('\n').filter(line => line.trim() !== '');
+// New simpler parser that respects columns based on spacing.
+function parseTextToRows(text: string): RowData[] {
+  const rows: RowData[] = [];
+  const lines = text.split('\n');
 
-  // Common date formats: MM/DD, MM/DD/YYYY, YYYY-MM-DD, DD Mon YYYY
-  const dateRegex = /(?:\d{1,2}\/\d{1,2}(?:\/\d{2,4})?|\d{4}-\d{2}-\d{2}|\d{1,2} [A-Za-z]{3} \d{4})/;
-  // Monetary amount: 1,234.56 or 1234.56, possibly with a negative sign
-  const amountRegex = /-?\$?[\d,]+(?:\.\d{2})/;
+  for (const line of lines) {
+    if (line.trim().length === 0) continue;
 
-  let potentialTransactionLines: { text: string; index: number }[] = [];
-
-  // First pass: identify lines that look like transactions
-  lines.forEach((line, index) => {
-    // A potential transaction line has a date and at least one monetary amount
-    if (dateRegex.test(line) && amountRegex.test(line)) {
-      potentialTransactionLines.push({ text: line, index });
+    // Split by 2 or more spaces to identify columns
+    const columns = line.split(/\s{2,}/).map(col => col.trim());
+    if (columns.length > 1) {
+        rows.push(columns);
+    } else if (columns.length === 1 && columns[0]) {
+        // Keep single-column lines if they contain content
+        rows.push(columns);
     }
-  });
-
-  if (potentialTransactionLines.length === 0) {
-    return [];
   }
 
-  // Second pass: process potential transactions and merge multi-line descriptions
-  for (let i = 0; i < potentialTransactionLines.length; i++) {
-    let currentLine = potentialTransactionLines[i];
-    let description = currentLine.text;
-
-    // Check for multi-line descriptions between this and the next transaction
-    const nextTransactionIndex = (i + 1 < potentialTransactionLines.length) ? potentialTransactionLines[i + 1].index : lines.length;
-    
-    for (let j = currentLine.index + 1; j < nextTransactionIndex; j++) {
-        const betweenLine = lines[j];
-        // If a line between transactions doesn't have a date or amount, it's likely part of the description
-        if (!dateRegex.test(betweenLine) && !amountRegex.test(betweenLine)) {
-            description += ' ' + betweenLine.trim();
-        }
-    }
-    
-    description = description.replace(/\s+/g, ' ').trim();
-
-    const dateMatch = description.match(dateRegex);
-    if (!dateMatch) continue;
-    const date = new Date(dateMatch[0]).toISOString().split('T')[0];
-
-    // Remove the date from the description to clean it up
-    description = description.substring(dateMatch.index! + dateMatch[0].length).trim();
-
-    const amounts = description.match(new RegExp(amountRegex, 'g'))?.map(a => parseFloat(a.replace(/[$,]/g, '')));
-    if (!amounts || amounts.length === 0) continue;
-
-    description = description.replace(new RegExp(amountRegex, 'g'), '').trim();
-
-    let debit: number | undefined;
-    let credit: number | undefined;
-    let balance: number | undefined;
-
-    // Logic to assign amounts to debit, credit, balance
-    if (amounts.length === 1) {
-        const amount = amounts[0];
-        if (amount < 0) {
-            debit = -amount;
-        } else {
-            credit = amount;
-        }
-    } else if (amounts.length === 2) {
-        // Assume [transaction, balance]
-        const [amount1, amount2] = amounts;
-        const transactionAmount = Math.abs(amount1) < Math.abs(amount2) ? amount1 : amount2;
-        balance = Math.abs(amount1) > Math.abs(amount2) ? amount1 : amount2;
-        if (transactionAmount < 0) {
-            debit = -transactionAmount;
-        } else {
-            credit = transactionAmount;
-        }
-    } else if (amounts.length >= 3) {
-        // Assume [debit, credit, balance] but need to check for 0s
-        const possibleDebit = amounts[0];
-        const possibleCredit = amounts[1];
-        balance = amounts[2];
-        
-        if (possibleDebit > 0) debit = possibleDebit;
-        if (possibleCredit > 0) credit = possibleCredit;
-    }
-    
-    // Final cleanup for description
-    description = description.replace(/purchase authorized on/i, '').trim();
-
-    transactions.push({
-      date,
-      description,
-      debit,
-      credit,
-      balance
-    });
-  }
-
-  return transactions;
+  return rows;
 }
 
 
@@ -163,7 +70,7 @@ export function HomePage() {
   const [file, setFile] = useState<File | null>(null);
   const [status, setStatus] = useState<Status>("idle");
   const [progress, setProgress] = useState(0);
-  const [transactions, setTransactions] = useState<Transaction[]>([]);
+  const [extractedData, setExtractedData] = useState<RowData[]>([]);
   const [error, setError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -175,7 +82,7 @@ export function HomePage() {
     setFile(null);
     setStatus("idle");
     setProgress(0);
-    setTransactions([]);
+    setExtractedData([]);
     setError(null);
     if (fileInputRef.current) {
       fileInputRef.current.value = "";
@@ -229,6 +136,9 @@ export function HomePage() {
           extractedItems += textContent.items.length;
           fullText += textContent.items.map((item: any) => item.str).join("\n");
         }
+        
+        // Preserve line breaks for the new parser
+        fullText = fullText.replace(/\r/g, '');
 
         if (fullText.trim().length < 100 || extractedItems < 10) {
           setStatus("parsing-ocr");
@@ -239,6 +149,15 @@ export function HomePage() {
                 setProgress(m.progress * 100);
               }
             },
+          });
+          
+          await worker.load();
+          await worker.loadLanguage('eng');
+          await worker.initialize('eng');
+          // Important: Tell Tesseract to preserve inter-word spaces to help identify columns
+          await worker.setParameters({
+              tessedit_pageseg_mode: Tesseract.PSM.AUTO,
+              preserve_interword_spaces: '1',
           });
 
           for (let i = 1; i <= pdf.numPages; i++) {
@@ -259,17 +178,18 @@ export function HomePage() {
         }
 
         setStatus("processing");
-        const result = parseTransactionsFromText(fullText);
+        const result = parseTextToRows(fullText);
         
         if (result && result.length > 0) {
-            setTransactions(result);
+            setExtractedData(result);
             setStatus("success");
         } else {
-            setError("No transactions were found. The document might be in an unsupported format. This non-AI parser is less flexible.");
+            setError("No data could be extracted. The document might be empty or in an unsupported format.");
             setStatus("error");
         }
       };
-    } catch (err: any) {
+    } catch (err: any)
+    {
       console.error(err);
       setError(err.message || "An unexpected error occurred during processing.");
       setStatus("error");
@@ -278,12 +198,12 @@ export function HomePage() {
 
   const handleExport = useCallback(
     (format: "xlsx" | "csv" | "json") => {
-      if (transactions.length === 0) return;
+      if (extractedData.length === 0) return;
 
-      const worksheet = XLSX.utils.json_to_sheet(transactions);
+      const worksheet = XLSX.utils.aoa_to_sheet(extractedData);
 
       if (format === "json") {
-        const dataStr = JSON.stringify(transactions, null, 2);
+        const dataStr = JSON.stringify(extractedData, null, 2);
         const blob = new Blob([dataStr], { type: "application/json" });
         const url = URL.createObjectURL(blob);
         const link = document.createElement("a");
@@ -297,13 +217,13 @@ export function HomePage() {
       }
 
       const workbook = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(workbook, worksheet, "Transactions");
+      XLSX.utils.book_append_sheet(workbook, worksheet, "Sheet1");
       XLSX.writeFile(
         workbook,
         `${file?.name.replace(".pdf", "")}.${format}`
       );
     },
-    [transactions, file]
+    [extractedData, file]
   );
 
   const statusInfo: Record<Status, { icon: React.ReactNode; text: string }> = {
@@ -399,35 +319,10 @@ export function HomePage() {
                 <div className="text-center">
                   <div className="flex items-center justify-center gap-2 text-xl font-semibold mb-2">
                     <CheckCircle2 className="h-8 w-8 text-green-500" />
-                    <span>Success! {transactions.length} transactions found.</span>
+                    <span>Success! Extracted {extractedData.length} rows.</span>
                   </div>
                   <p className="text-muted-foreground">{file?.name}</p>
-                </div>
-                
-                <div>
-                  <h3 className="text-lg font-semibold mb-2">Preview (First 20 rows)</h3>
-                  <div className="rounded-md border max-h-96 overflow-auto">
-                    <UiTable>
-                      <TableHeader className="sticky top-0 bg-card">
-                        <TableRow>
-                          <TableHead>Date</TableHead>
-                          <TableHead>Description</TableHead>
-                          <TableHead className="text-right">Debit</TableHead>
-                          <TableHead className="text-right">Credit</TableHead>
-                        </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        {transactions.slice(0, 20).map((t, i) => (
-                          <TableRow key={i}>
-                            <TableCell>{t.date}</TableCell>
-                            <TableCell>{t.description}</TableCell>
-                            <TableCell className="text-right">{t.debit?.toFixed(2)}</TableCell>
-                            <TableCell className="text-right">{t.credit?.toFixed(2)}</TableCell>
-                          </TableRow>
-                        ))}
-                      </TableBody>
-                    </UiTable>
-                  </div>
+                   <p className="text-sm text-muted-foreground mt-2">Your data is ready to be downloaded.</p>
                 </div>
 
                 <div className="space-y-4">
@@ -470,3 +365,5 @@ export function HomePage() {
     </div>
   );
 }
+
+    
