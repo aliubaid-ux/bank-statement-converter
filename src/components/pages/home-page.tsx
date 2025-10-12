@@ -80,10 +80,9 @@ function parseTextItemsToRows(items: TextItem[]): RowData[] {
 
         for (let i = 1; i < items.length; i++) {
             const item = items[i];
-            const prevItem = items[i - 1];
-
+            
             // If the vertical position is similar, it's the same line
-            if (Math.abs(item.transform[5] - prevItem.transform[5]) < 5) {
+            if (Math.abs(item.transform[5] - currentLine.y) < 5) {
                 currentLine.items.push(item);
             } else {
                 // New line
@@ -94,11 +93,13 @@ function parseTextItemsToRows(items: TextItem[]): RowData[] {
         lines.push(currentLine); // Push the last line
     }
 
-    const avgCharWidth = items.reduce((acc, item) => acc + (item.width / item.str.length), 0) / items.length;
+    const validItems = items.filter(item => item.str.length > 0 && item.width > 0);
+    const avgCharWidth = validItems.reduce((acc, item) => acc + (item.width / item.str.length), 0) / (validItems.length || 1);
     const SPACE_THRESHOLD = avgCharWidth * 2.5;
 
     return lines.map(line => {
-        if (line.items.length === 1) return [line.items[0].str];
+        if (line.items.length === 0) return [];
+        if (line.items.length === 1) return [line.items[0].str.trim()];
         
         const row: string[] = [];
         let currentCell = line.items[0].str;
@@ -122,8 +123,8 @@ function parseTextItemsToRows(items: TextItem[]): RowData[] {
             }
         }
         row.push(currentCell.trim());
-        return row;
-    });
+        return row.filter(cell => cell.length > 0);
+    }).filter(row => row.length > 0);
 }
 
 
