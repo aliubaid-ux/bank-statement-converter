@@ -10,10 +10,12 @@ import {
   Download,
   FileJson,
   FileSpreadsheet,
-  Table,
+  Table as TableIcon,
   RotateCcw,
+  Sheet,
 } from "lucide-react";
 import * as pdfjsLib from "pdfjs-dist";
+import type { TextItem } from "pdfjs-dist/types/src/display/api";
 import Tesseract from "tesseract.js";
 import * as XLSX from "xlsx";
 
@@ -28,6 +30,16 @@ import {
 import { Progress } from "@/components/ui/progress";
 import { cn } from "@/lib/utils";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { useToast } from "@/hooks/use-toast";
+import {
+    Table,
+    TableBody,
+    TableCell,
+    TableHead,
+    TableHeader,
+    TableRow,
+  } from "@/components/ui/table";
+import { ScrollArea } from "@/components/ui/scroll-area";
 
 type Status =
   | "idle"
@@ -39,10 +51,114 @@ type Status =
   | "success"
   | "error";
 
-// This type is now a generic array of strings, representing a row.
 type RowData = string[];
 
 const MAX_FILE_SIZE = 20 * 1024 * 1024; // 20 MB
+
+function parseTextItemsToRows(items: TextItem[]): RowData[] {
+    if (!items || items.length === 0) {
+        return [];
+    }
+
+    // Sort items by their vertical position, then horizontal
+    items.sort((a, b) => {
+        if (a.transform[5] > b.transform[5]) return -1;
+        if (a.transform[5] < b.transform[5]) return 1;
+        if (a.transform[4] < b.transform[4]) return -1;
+        if (a.transform[4] > b.transform[4]) return 1;
+        return 0;
+    });
+
+    const lines: TextItem[][] = [];
+    let currentLine: TextItem[] = [];
+    let lastY = -1;
+    const Y_TOLERANCE = 5; // How close in vertical pixels items need to be to be on the same line
+
+    for (const item of items) {
+        if (item.str.trim() === '') continue;
+
+        const currentY = item.transform[5];
+
+        if (lastY === -1 || Math.abs(currentY - lastY) < Y_TOLERANCE) {
+            currentLine.push(item);
+        } else {
+            if (currentLine.length > 0) {
+                // Sort items on the line by their horizontal position before pushing
+                lines.push(currentLine.sort((a, b) => a.transform[4] - b.transform[4]));
+            }
+            currentLine = [item];
+        }
+        lastY = currentY;
+    }
+    if (currentLine.length > 0) {
+        lines.push(currentLine.sort((a, b) => a.transform[4] - b.transform[4]));
+    }
+
+    // This part is a heuristic to find column boundaries based on text item positions.
+    const columnBoundaries: number[] = [];
+    const avgCharWidth = 8; // Assumed average character width for estimating column splits
+
+    lines.forEach(line => {
+        for (let i = 0; i < line.length - 1; i++) {
+            const currentItem = line[i];
+            const nextItem = line[i+1];
+            const gap = nextItem.transform[4] - (currentItem.transform[4] + currentItem.width);
+            
+            // If there's a significant gap, it's likely a new column.
+            if (gap > avgCharWidth * 2) {
+                const boundary = currentItem.transform[4] + currentItem.width + gap / 2;
+                // Add boundary if it's not close to an existing one.
+                if (!columnBoundaries.some(b => Math.abs(b - boundary) < avgCharWidth)) {
+                    columnBoundaries.push(boundary);
+                }
+            }
+        }
+    });
+    columnBoundaries.sort((a, b) => a - b);
+
+    // Now, create the final rows by assigning text to columns.
+    const finalRows: RowData[] = [];
+    lines.forEach(line => {
+        if (line.length === 0) return;
+
+        // If there's only one item on the line, treat it as a full-width row.
+        if (line.length === 1) {
+            finalRows.push([line[0].str]);
+            return;
+        }
+
+        const row: string[] = [];
+        let currentColumnIndex = 0;
+        let currentColumnText = "";
+
+        for(const item of line) {
+            if (currentColumnIndex < columnBoundaries.length && item.transform[4] > columnBoundaries[currentColumnIndex]) {
+                row.push(currentColumnText.trim());
+                currentColumnText = "";
+                currentColumnIndex++;
+                // Skip empty columns
+                while (currentColumnIndex < columnBoundaries.length && item.transform[4] > columnBoundaries[currentColumnIndex]) {
+                    row.push("");
+                    currentColumnIndex++;
+                }
+            }
+            currentColumnText += item.str + " ";
+        }
+        row.push(currentColumnText.trim());
+
+        // Fill remaining columns if any
+        while(row.length < columnBoundaries.length + 1) {
+            row.push("");
+        }
+
+        if (row.some(cell => cell.trim() !== '')) {
+            finalRows.push(row);
+        }
+    });
+
+    return finalRows;
+}
+
 
 // New simpler parser that respects columns based on spacing.
 function parseTextToRows(text: string): RowData[] {
@@ -73,6 +189,7 @@ export function HomePage() {
   const [extractedData, setExtractedData] = useState<RowData[]>([]);
   const [error, setError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const { toast } = useToast();
 
   useEffect(() => {
     pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.mjs`;
@@ -127,22 +244,21 @@ export function HomePage() {
 
         setStatus("parsing-text");
         const pdf = await pdfjsLib.getDocument(typedarray).promise;
-        let fullText = "";
         
-        let extractedItems = 0;
+        let allTextItems: TextItem[] = [];
+        let extractedItemsCount = 0;
+
         for (let i = 1; i <= pdf.numPages; i++) {
           const page = await pdf.getPage(i);
           const textContent = await page.getTextContent();
-          extractedItems += textContent.items.length;
-          fullText += textContent.items.map((item: any) => item.str).join("\n");
+          extractedItemsCount += textContent.items.length;
+          allTextItems.push(...textContent.items.map(item => item as TextItem));
         }
-        
-        // Preserve line breaks for the new parser
-        fullText = fullText.replace(/\r/g, '');
 
-        if (fullText.trim().length < 100 || extractedItems < 10) {
+        // If very little text was extracted, it's likely a scanned/image-based PDF.
+        if (extractedItemsCount < 20) {
           setStatus("parsing-ocr");
-          let ocrText = "";
+          let fullText = "";
           const worker = await Tesseract.createWorker({
             logger: (m) => {
               if (m.status === "recognizing text") {
@@ -154,7 +270,6 @@ export function HomePage() {
           await worker.load();
           await worker.loadLanguage('eng');
           await worker.initialize('eng');
-          // Important: Tell Tesseract to preserve inter-word spaces to help identify columns
           await worker.setParameters({
               tessedit_pageseg_mode: Tesseract.PSM.AUTO,
               preserve_interword_spaces: '1',
@@ -162,30 +277,36 @@ export function HomePage() {
 
           for (let i = 1; i <= pdf.numPages; i++) {
             const page = await pdf.getPage(i);
-            const viewport = page.getViewport({ scale: 2 });
+            const viewport = page.getViewport({ scale: 2.5 });
             const canvas = document.createElement("canvas");
             const context = canvas.getContext("2d")!;
             canvas.height = viewport.height;
             canvas.width = viewport.width;
             await page.render({ canvasContext: context, viewport }).promise;
-            const {
-              data: { text },
-            } = await worker.recognize(canvas);
-            ocrText += text;
+            const { data: { text } } = await worker.recognize(canvas);
+            fullText += text + "\n";
           }
           await worker.terminate();
-          fullText = ocrText;
-        }
 
-        setStatus("processing");
-        const result = parseTextToRows(fullText);
-        
-        if (result && result.length > 0) {
+          setStatus("processing");
+          const result = parseTextToRows(fullText);
+          if (result && result.length > 0) {
             setExtractedData(result);
             setStatus("success");
-        } else {
-            setError("No data could be extracted. The document might be empty or in an unsupported format.");
+          } else {
+            setError("OCR failed to extract any data. The document might be unreadable.");
             setStatus("error");
+          }
+        } else {
+            setStatus("processing");
+            const result = parseTextItemsToRows(allTextItems);
+            if (result && result.length > 0) {
+                setExtractedData(result);
+                setStatus("success");
+            } else {
+                setError("No data could be extracted. The document might be empty or in an unsupported format.");
+                setStatus("error");
+            }
         }
       };
     } catch (err: any)
@@ -238,6 +359,8 @@ export function HomePage() {
   };
 
   const isProcessing = ["reading", "parsing-text", "parsing-ocr", "processing"].includes(status);
+  
+  const maxColumns = Math.max(0, ...extractedData.map(row => row.length));
 
   return (
     <div className="container mx-auto px-4 sm:px-6 lg:px-8 py-12">
@@ -327,18 +450,49 @@ export function HomePage() {
 
                 <div className="space-y-4">
                   <h3 className="text-lg font-semibold text-center">Download as:</h3>
-                  <div className="flex flex-col sm:flex-row justify-center gap-4">
+                  <div className="flex flex-wrap justify-center gap-4">
                     <Button onClick={() => handleExport("xlsx")} size="lg">
                       <FileSpreadsheet /> Excel (.xlsx)
                     </Button>
                     <Button onClick={() => handleExport("csv")} size="lg" variant="secondary">
-                      <Table /> CSV (.csv)
+                      <TableIcon /> CSV (.csv)
                     </Button>
                     <Button onClick={() => handleExport("json")} size="lg" variant="secondary">
                       <FileJson /> JSON (.json)
                     </Button>
+                     <Button 
+                        onClick={() => toast({ title: "Coming Soon!", description: "Direct import to Google Sheets is on its way."})} 
+                        size="lg" 
+                        variant="secondary">
+                      <Sheet /> Google Sheets
+                    </Button>
                   </div>
                 </div>
+
+                <div className="space-y-4">
+                    <h3 className="text-lg font-semibold text-center">Data Preview</h3>
+                    <ScrollArea className="h-72 w-full rounded-md border">
+                        <Table>
+                            <TableHeader>
+                                <TableRow>
+                                    {Array.from({ length: maxColumns }).map((_, i) => (
+                                        <TableHead key={i}>Column {i + 1}</TableHead>
+                                    ))}
+                                </TableRow>
+                            </TableHeader>
+                            <TableBody>
+                                {extractedData.map((row, rowIndex) => (
+                                    <TableRow key={rowIndex}>
+                                        {Array.from({ length: maxColumns }).map((_, cellIndex) => (
+                                            <TableCell key={cellIndex}>{row[cellIndex] || ''}</TableCell>
+                                        ))}
+                                    </TableRow>
+                                ))}
+                            </TableBody>
+                        </Table>
+                    </ScrollArea>
+                </div>
+
                 <div className="text-center pt-4">
                    <Button onClick={resetState} variant="outline"><RotateCcw/> Convert Another File</Button>
                 </div>
@@ -365,5 +519,3 @@ export function HomePage() {
     </div>
   );
 }
-
-    
