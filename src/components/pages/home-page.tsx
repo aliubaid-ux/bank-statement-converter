@@ -455,7 +455,7 @@ export function HomePage() {
                       <FileSpreadsheet /> Excel (.xlsx)
                     </Button>
                      <Button onClick={handleOpenInSheets} size="lg" variant="secondary">
-                        <Clipboard /> Open in Google Sheets
+                        <Clipboard /> Copy & Open in Sheets
                     </Button>
                     <Button onClick={() => handleExport("csv")} size="lg" variant="outline">
                       <TableIcon /> CSV (.csv)
